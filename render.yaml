@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: sweet-backend
+    env: php
+    buildCommand: |
+      composer install --no-dev --optimize-autoloader
+    startCommand: |
+      php artisan migrate --force && php artisan serve --host 0.0.0.0 --port 10000
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_KEY
+        value: base64:C4W9pCeKOWQ7XhfT8ZPz7wdvP0zq13nLWb4fWh7AXnk=
+      - key: APP_DEBUG
+        value: false
+      - key: APP_URL
+        value: https://sweet-backend-1-a8h6.onrender.com
