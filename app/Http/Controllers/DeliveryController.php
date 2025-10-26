@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use Illuminate\Support\Facades\Log;
 use Illuminate\Http\Request;
 use App\Models\Delivery;
 use Razorpay\Api\Api;
 use App\Models\Cart;
 use Exception;
+
 
 class DeliveryController extends Controller
 {
@@ -69,39 +71,81 @@ class DeliveryController extends Controller
         return response()->json(['deliveries' => $deliveries]);
     }
 
-    // ✅ Step 1: Create Razorpay order
     public function createRazorpayOrder($deliveryId, Request $request)
     {
         try {
             $userId = $request->query('user_id');
 
-            // Initialize Razorpay
-            $api = new Api(env('RAZORPAY_KEY_ID'), env('RAZORPAY_KEY_SECRET'));
+            // Get Razorpay keys from .env
+            $key = env('RAZORPAY_KEY');
+            $secret = env('RAZORPAY_SECRET');
 
-            // Create order on Razorpay
+            if (!$key || !$secret) {
+                \Log::error('Razorpay keys missing in .env');
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Razorpay keys are not configured on the server.',
+                ], 500);
+            }
+
+            // Find delivery and validate
+            $delivery = Delivery::where('id', $deliveryId)
+                ->where('user_id', $userId)
+                ->where('status', 'pending')
+                ->first();
+
+            if (!$delivery) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Delivery not found or not payable'
+                ], 404);
+            }
+
+            // Validate amount
+            if (!isset($delivery->total_amount) || !is_numeric($delivery->total_amount) || $delivery->total_amount <= 0) {
+                \Log::error("Invalid delivery amount", ['delivery_id' => $deliveryId, 'amount' => $delivery->total_amount]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid order amount. Please contact support.'
+                ], 400);
+            }
+
+            // Initialize Razorpay API
+            $api = new \Razorpay\Api\Api($key, $secret);
+
+            // Convert amount to paise
+            $amountPaise = intval(round($delivery->total_amount * 100));
+
+            // Create order
             $order = $api->order->create([
                 'receipt' => 'order_rcptid_' . $deliveryId,
-                'amount' => 50000, // ₹500 in paise
+                'amount' => $amountPaise,
                 'currency' => 'INR',
             ]);
 
+            // Success response
             return response()->json([
                 'success' => true,
                 'order_id' => $order['id'],
                 'amount' => $order['amount'],
                 'currency' => $order['currency'],
-                'key' => env('RAZORPAY_KEY_ID'),
+                'key' => $key,
             ]);
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
+            \Log::error('Razorpay order creation failed', [
+                'delivery_id' => $deliveryId,
+                'user_id' => $request->query('user_id'),
+                'error' => $e->getMessage(),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Error creating Razorpay order',
-                'error' => $e->getMessage(),
+                'error' => $e->getMessage(), // remove in production
             ], 500);
         }
     }
 
-    // ✅ Step 2: Mark as paid after success
     public function payOrder($id, Request $request)
     {
         $userId = $request->query('user_id');
@@ -112,12 +156,17 @@ class DeliveryController extends Controller
             ->first();
 
         if (!$delivery) {
-            return response()->json(['message' => 'Order not found or already paid'], 404);
+            return response()->json(['message' => 'Order not found or already processed'], 404);
         }
 
-        $delivery->status = 'completed';
+        // ✅ Update delivery status to success
+        $delivery->status = 'success';
         $delivery->save();
 
-        return response()->json(['message' => 'Payment successful', 'delivery' => $delivery]);
+        return response()->json([
+            'success' => true,
+            'message' => 'Payment successful and delivery updated to success',
+            'delivery' => $delivery
+        ]);
     }
 }
